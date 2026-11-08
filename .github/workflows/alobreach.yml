@@ -19,15 +19,15 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  JOB_ID: ${{ inputs.job_id || 'job_b66df4d21da02a9c75864841' }}
+  JOB_ID: ${{ inputs.job_id || 'job_299ef74952e2e69941e11239' }}
   TARGET_REF: fix/cve-amqp-client-5.37.0
-  RUNNER_IMAGE: ghcr.io/jeanm3ry/alobreach-runner@sha256:699a90d9d0e3dc7c97f5ca5effd438f85081ef1b1a4d8098c6ef746111fcb0f4  # dev-jdk25-amd64, pinned by digest
+  RUNNER_IMAGE: ghcr.io/jeanm3ry/alobreach-runner@sha256:78173dc3062a49b17a7bf826bc2dddf954d8381ba6f561d0b1972dd0d3c51786  # dev-jdk25-amd64, pinned by digest
 
 jobs:
   run:
     name: Alobreach run
     runs-on: ubuntu-latest
-    timeout-minutes: 110
+    timeout-minutes: 170
     steps:
       - name: Free disk space
         run: |
@@ -86,11 +86,12 @@ jobs:
             -e ALOBREACH_TOKEN -e ALOBREACH_IMAGE_DIGEST="${RUNNER_IMAGE#*@}" \
             -e DOCKER_HOST=unix:///var/run/docker.sock \
             -e TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock \
+            -e TZ=Europe/Madrid \
             -e MAVEN_OPTS=-Xmx1024m \
             -e NODE_OPTIONS=--max_old_space_size=4096 \
             -e SUREFIRE_JAVA_OPTS="-Xmx1200m -Xss256k -XX:+ExitOnOutOfMemoryError" \
             "$RUNNER_IMAGE" run --job-id "$JOB_ID" --repo-slug "$GITHUB_REPOSITORY" --brain-url "$BRAIN_URL" \
-            --repo /work --out /out --config /config/alobreach.yml --timeout-minutes 90
+            --repo /work --out /out --config /config/alobreach.yml --timeout-minutes 150
 
       - name: Collect the change
         if: always()
