@@ -19,9 +19,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  JOB_ID: ${{ inputs.job_id || 'job_51995aace25f6982c7e7719c' }}
+  JOB_ID: ${{ inputs.job_id || 'job_b66df4d21da02a9c75864841' }}
   TARGET_REF: fix/cve-amqp-client-5.37.0
-  RUNNER_IMAGE: ghcr.io/jeanm3ry/alobreach-runner@sha256:88ba36d65e970249bb75b7ee9baaca18d8f59943cc0dd61df0ef7a2a5b38d357  # dev-jdk25-amd64, pinned by digest
+  RUNNER_IMAGE: ghcr.io/jeanm3ry/alobreach-runner@sha256:699a90d9d0e3dc7c97f5ca5effd438f85081ef1b1a4d8098c6ef746111fcb0f4  # dev-jdk25-amd64, pinned by digest
 
 jobs:
   run:
@@ -48,9 +48,9 @@ jobs:
           java-version: 25
           cache: maven
 
-      - name: Alobreach config (not part of the repository)
+      - name: Alobreach config (outside the checkout, passed with --config)
         run: |
-          cat > .alobreach.yml <<'YML'
+          cat > "$RUNNER_TEMP/alobreach.yml" <<'YML'
           build: "mvn -B -ntp clean install -T4 -DskipTests -Dpkg.skip=true"
           test: "mvn -B -ntp test -pl common/queue,common/integration/rabbitmq-integrations,rule-engine/rule-engine-components,integration/rabbitmq,msa/integration/rabbitmq -am -Dpkg.skip=true"
           env_allowlist: [DOCKER_HOST, TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE, SUREFIRE_JAVA_OPTS, NODE_OPTIONS]
@@ -59,7 +59,6 @@ jobs:
             enabled: false
           share_outcomes: false
           YML
-          echo ".alobreach.yml" >> .git/info/exclude
           git status --porcelain
 
       - name: Pull the runner image
@@ -82,6 +81,7 @@ jobs:
           docker run --rm --network host \
             --group-add "$(stat -c %g /var/run/docker.sock)" \
             -v "$GITHUB_WORKSPACE:/work" -v "$OUT:/out" -v "$HOME/.m2:/home/runner/.m2" \
+            -v "$RUNNER_TEMP/alobreach.yml:/config/alobreach.yml:ro" \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -e ALOBREACH_TOKEN -e ALOBREACH_IMAGE_DIGEST="${RUNNER_IMAGE#*@}" \
             -e DOCKER_HOST=unix:///var/run/docker.sock \
@@ -90,7 +90,7 @@ jobs:
             -e NODE_OPTIONS=--max_old_space_size=4096 \
             -e SUREFIRE_JAVA_OPTS="-Xmx1200m -Xss256k -XX:+ExitOnOutOfMemoryError" \
             "$RUNNER_IMAGE" run --job-id "$JOB_ID" --repo-slug "$GITHUB_REPOSITORY" --brain-url "$BRAIN_URL" \
-            --repo /work --out /out --timeout-minutes 90
+            --repo /work --out /out --config /config/alobreach.yml --timeout-minutes 90
 
       - name: Collect the change
         if: always()
