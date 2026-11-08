@@ -1,0 +1,111 @@
+# Fork-only workflow: runs Alobreach on the amqp-client fix branch. Lives on the alobreach-ci branch only, never in a
+# pull request to thingsboard/thingsboard.
+name: Alobreach (fork only)
+
+on:
+  push:
+    branches: [alobreach-ci]
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: Alobreach job id
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alobreach
+  cancel-in-progress: false
+
+env:
+  JOB_ID: ${{ inputs.job_id || 'job_51995aace25f6982c7e7719c' }}
+  TARGET_REF: fix/cve-amqp-client-5.37.0
+  RUNNER_IMAGE: ghcr.io/jeanm3ry/alobreach-runner@sha256:88ba36d65e970249bb75b7ee9baaca18d8f59943cc0dd61df0ef7a2a5b38d357  # dev-jdk25-amd64, pinned by digest
+
+jobs:
+  run:
+    name: Alobreach run
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    steps:
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker image prune --all --force > /dev/null
+          df -h /
+
+      - name: Checkout the fix branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TARGET_REF }}
+
+      - name: Set up JDK
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: corretto
+          java-version: 25
+          cache: maven
+
+      - name: Alobreach config (not part of the repository)
+        run: |
+          cat > .alobreach.yml <<'YML'
+          build: "mvn -B -ntp clean install -T4 -DskipTests -Dpkg.skip=true"
+          test: "mvn -B -ntp test -pl common/queue,common/integration/rabbitmq-integrations,rule-engine/rule-engine-components,integration/rabbitmq,msa/integration/rabbitmq -am -Dpkg.skip=true"
+          env_allowlist: [DOCKER_HOST, TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE, SUREFIRE_JAVA_OPTS, NODE_OPTIONS]
+          reachability: report
+          capture:
+            enabled: false
+          share_outcomes: false
+          YML
+          echo ".alobreach.yml" >> .git/info/exclude
+          git status --porcelain
+
+      - name: Pull the runner image
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+        run: |
+          echo "$GHCR_PAT" | docker login ghcr.io -u JeanM3ry --password-stdin
+          docker pull "$RUNNER_IMAGE"
+          docker logout ghcr.io
+
+      - name: Run Alobreach
+        env:
+          ALOBREACH_TOKEN: ${{ secrets.ALOBREACH_TOKEN }}
+          BRAIN_URL: ${{ secrets.BRAIN_URL }}
+        run: |
+          OUT="$RUNNER_TEMP/alobreach-out"
+          mkdir -p "$OUT" "$HOME/.m2"
+          # The runner image runs as uid 10001.
+          sudo chown -R 10001:10001 "$GITHUB_WORKSPACE" "$OUT" "$HOME/.m2"
+          docker run --rm --network host \
+            --group-add "$(stat -c %g /var/run/docker.sock)" \
+            -v "$GITHUB_WORKSPACE:/work" -v "$OUT:/out" -v "$HOME/.m2:/home/runner/.m2" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e ALOBREACH_TOKEN -e ALOBREACH_IMAGE_DIGEST="${RUNNER_IMAGE#*@}" \
+            -e DOCKER_HOST=unix:///var/run/docker.sock \
+            -e TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock \
+            -e MAVEN_OPTS=-Xmx1024m \
+            -e NODE_OPTIONS=--max_old_space_size=4096 \
+            -e SUREFIRE_JAVA_OPTS="-Xmx1200m -Xss256k -XX:+ExitOnOutOfMemoryError" \
+            "$RUNNER_IMAGE" run --job-id "$JOB_ID" --repo-slug "$GITHUB_REPOSITORY" --brain-url "$BRAIN_URL" \
+            --repo /work --out /out --timeout-minutes 90
+
+      - name: Collect the change
+        if: always()
+        run: |
+          OUT="$RUNNER_TEMP/alobreach-out"
+          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$OUT" "$HOME/.m2"
+          git diff > "$OUT/alobreach.diff"
+          git diff --stat
+          df -h /
+
+      - name: Upload the run artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: alobreach-out
+          path: ${{ runner.temp }}/alobreach-out/
+          retention-days: 14
+          if-no-files-found: warn
